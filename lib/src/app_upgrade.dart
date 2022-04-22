@@ -1,11 +1,9 @@
 import 'dart:io';
-import 'dart:isolate';
 
 import 'package:app_installer/app_installer.dart';
 
 import 'app_info_bean.dart';
 
-// import 'package:android_intent_plus/android_intent.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/cupertino.dart';
@@ -17,18 +15,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_apps/device_apps.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-// import 'package:path_provider/path_provider.dart';
-// import 'package:flutter_downloader/flutter_downloader.dart';
-// import 'package:path_provider/path_provider.dart';
-// import 'package:permission_handler/permission_handler.dart';
-
-// import 'package:flutter_app_installer/flutter_app_installer.dart';
-
-// import 'package:flutter_install_apk_silently/flutter_install_apk_silently.dart';
-
 class AppUpgradeParam {
   final int newVersionCode;
   final bool forceUpdate; //强制更新
+  final Function(Function updateClick, Function ignoreUpdateClick)? onUpdate;
   final Widget Function(Function updateClick, Function ignoreUpdateClick)?
       updateDialogBuilder;
   final String marketChannel; //当前包市场渠道
@@ -57,6 +47,7 @@ class AppUpgradeParam {
   AppUpgradeParam(
       {required this.newVersionCode,
       this.forceUpdate = false,
+      this.onUpdate,
       this.updateDialogBuilder,
       this.marketChannel = '',
       this.updateContentText,
@@ -68,7 +59,8 @@ class AppUpgradeParam {
       this.appStoreId});
 }
 
-enum MarketsType { xiaomi, yingyongbao, huawei, oppo, vivo, samsung }
+enum MarketsType { xiaomi, yingyongbao, huawei, oppo, vivo, samsung, def }
+enum _LoadingState { loading, loadComplete, notLoaded }
 
 const _mapMarketsType2Name = {
   MarketsType.yingyongbao: "应用宝",
@@ -81,6 +73,8 @@ const _mapMarketsType2Name = {
 
 class AppUpgrade {
   static AppUpgrade? _instance;
+
+  static _LoadingState _loadingState = _LoadingState.notLoaded;
 
   static get instance => _instance ??= AppUpgrade._();
 
@@ -114,16 +108,25 @@ class AppUpgrade {
     bool needUpdate = nowVersion < upgradeParam.newVersionCode; //是否提示更新
     if (needUpdate && await _notIgnoreUpdate(upgradeParam.newVersionCode)) {
       ///
-      showDialog(
-          context: context,
-          builder: (context) {
-            return upgradeParam.updateDialogBuilder?.call(() {
-                  _update.call(context);
-                }, () {
-                  _ignoreUpdate.call();
-                }) ??
-                _defaultDialogWidget(context);
-          });
+      if (upgradeParam.onUpdate != null) {
+        upgradeParam.onUpdate?.call(() {
+          _update.call(context);
+        }, () {
+          _ignoreUpdate.call();
+        });
+      } else {
+        showDialog(
+            context: context,
+            barrierDismissible: !upgradeParam.forceUpdate,
+            builder: (context) {
+              return upgradeParam.updateDialogBuilder?.call(() {
+                    _update.call(context);
+                  }, () {
+                    _ignoreUpdate.call();
+                  }) ??
+                  _defaultDialogWidget(context);
+            });
+      }
     } else if (recheck) {
       showDialog(
           context: context,
@@ -274,7 +277,8 @@ class AppUpgrade {
           apps.add(AppInfoBean(
               appName: _mapMarketsType2Name[i.key],
               appIcon: (app as ApplicationWithIcon).icon,
-              application: app));
+              application: app,
+              marketsType: i.key));
         }
       }
     }
@@ -294,7 +298,7 @@ class AppUpgrade {
           padding: EdgeInsets.only(
               bottom: MediaQuery.of(context).padding.bottom + 15, top: 20),
           child: SizedBox(
-            height: 100 * ((apps.length / 4).floor() + 1),
+            height: 100 * ((apps.length + 2) / 4).ceil().toDouble(),
             child: GridView.builder(
                 physics: const NeverScrollableScrollPhysics(),
                 padding: const EdgeInsets.symmetric(horizontal: 30),
@@ -342,7 +346,7 @@ class AppUpgrade {
                   return InkWell(
                     onTap: () async {
                       var market =
-                          "${_mapMarket[app.appName]}${_extra?["testPackageName"] ?? packageName}";
+                          "${_mapMarket[app.marketsType]}${_extra?["testPackageName"] ?? packageName}";
                       _lunchTo(market, errorMessage: "打开应用市场失败");
                     },
                     child: Column(
@@ -373,9 +377,9 @@ class AppUpgrade {
   }
 
   static _lunchTo(String url, {String errorMessage = '启动失败'}) async {
-    bool ok = await canLaunch(_upgradeParam.apkDownloadUrl!);
+    bool ok = await canLaunch(url);
     if (ok) {
-      bool success = await launch(_upgradeParam.apkDownloadUrl!);
+      bool success = await launch(url);
       if (!success) {
         print("$errorMessage$url");
         _showToast(errorMessage);
@@ -406,9 +410,6 @@ class AppUpgrade {
           //   print('需要读写手机存储权限才能下载新版本安装包');
           //   return;
           // }
-
-          ///下载
-          var cancelToken = CancelToken();
           var savePath = (await getTemporaryDirectory()).path;
           // var savePath = (await getExternalStorageDirectories(
           //         type: StorageDirectory.downloads))!
@@ -418,30 +419,48 @@ class AppUpgrade {
               apkDownloadUrl.contains('/') && apkDownloadUrl.contains('.apk'));
           var fileName = apkDownloadUrl.split('/').last;
           File apkFile = File("$savePath/${_packageInfo?.appName}/$fileName");
-          Navigator.of(context).pop();
-          _closeUpdateDialog(context);
-          try {
-            if (apkFile.existsSync()) {
-              apkFile.deleteSync();
+          if (_loadingState == _LoadingState.loadComplete &&
+              !apkFile.existsSync()) {
+            _loadingState = _LoadingState.notLoaded;
+          }
+          if (_loadingState == _LoadingState.loading) {
+            _showToast("${_packageInfo?.appName} 后台下载更新中($_updateProgress)...");
+            return;
+          } else if (_loadingState == _LoadingState.notLoaded) {
+            ///下载
+            var cancelToken = CancelToken();
+            Navigator.of(context).pop();
+            _closeUpdateDialog(context);
+            try {
+              if (apkFile.existsSync()) {
+                apkFile.deleteSync();
+              }
+              if (!apkFile.existsSync()) {
+                print("开始下载中${apkFile.path}");
+                _showToast("${_packageInfo?.appName} 后台下载更新...");
+                _loadingState = _LoadingState.loading;
+                await _downloadDio.download(
+                  apkDownloadUrl,
+                  apkFile.path,
+                  onReceiveProgress:
+                      _extra?["onReceiveProgress"] ?? _showDownloadProgress,
+                  cancelToken: cancelToken,
+                );
+              }
+              _loadingState = _LoadingState.loadComplete;
+            } catch (e) {
+              print(e);
+              _showToast("下载失败,请检查网络连接后重试");
+              _loadingState = _LoadingState.notLoaded;
             }
-            if (!apkFile.existsSync()) {
-              print("开始下载中${apkFile.path}");
-              _showToast("${_packageInfo?.appName} 后台下载更新...");
-              await _downloadDio.download(
-                apkDownloadUrl,
-                apkFile.path,
-                onReceiveProgress:
-                    _extra?["onReceiveProgress"] ?? _showDownloadProgress,
-                cancelToken: cancelToken,
-              );
-            }
-            print("开始安装${apkFile.path}");
-            AppInstaller.installApk(apkFile.path)
-                .then((value) => print("安装器打开成功"));
-          } catch (e) {
-            print(e);
-            _showToast("下载失败,请检查网络连接后重试");
-          } finally {}
+          }
+
+          ///开始安装
+          print("开始安装${apkFile.path}");
+          AppInstaller.installApk(apkFile.path).then((value) {
+            print("安装器打开成功");
+            return value;
+          });
         },
         child: _upgradeParam.apkDownloadWidget ??
             Column(
@@ -465,11 +484,17 @@ class AppUpgrade {
             ));
   }
 
+//  更新进度
+  static String _updateProgress = '';
+
   static void _showDownloadProgress(received, total) {
     if (total != -1) {
+      _updateProgress = (received / total * 100).toStringAsFixed(0) + '%';
       // _showToast("${_packageInfo?.appName} 已更新:" +
       //     (received / total * 100).toStringAsFixed(0) +
       //     '%');
+    } else {
+      _updateProgress = '';
     }
   }
 
