@@ -40,3 +40,5 @@ class AppInfoBean {
     return data;
   }
 }
+
+

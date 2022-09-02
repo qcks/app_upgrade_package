@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:app_installer/app_installer.dart';
@@ -14,6 +15,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_apps/device_apps.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'download_qiu.dart';
 
 class AppUpgradeParam {
   final int newVersionCode;
@@ -282,7 +285,6 @@ class AppUpgrade {
         }
       }
     }
-    _map.forEach((key, value) async {});
     _apps = apps;
     return apps;
   }
@@ -392,13 +394,13 @@ class AppUpgrade {
 
   static Dio? _dio;
 
-  static get _downloadDio {
+  static Dio get _downloadDio {
     if (_dio != null) {
-      return _dio;
+      return _dio!;
     }
     _dio = Dio();
     _dio!.interceptors.add(LogInterceptor());
-    return _dio;
+    return _dio!;
   }
 
   static Widget _apkDownloadWidget(BuildContext context,
@@ -419,6 +421,7 @@ class AppUpgrade {
               apkDownloadUrl.contains('/') && apkDownloadUrl.contains('.apk'));
           var fileName = apkDownloadUrl.split('/').last;
           File apkFile = File("$savePath/${_packageInfo?.appName}/$fileName");
+          _showToast("准备下载");
           if (_loadingState == _LoadingState.loadComplete &&
               !apkFile.existsSync()) {
             _loadingState = _LoadingState.notLoaded;
@@ -439,28 +442,45 @@ class AppUpgrade {
                 print("开始下载中${apkFile.path}");
                 _showToast("${_packageInfo?.appName} 后台下载更新...");
                 _loadingState = _LoadingState.loading;
+                _showDownloadProgressWidget(context, 0);
                 await _downloadDio.download(
                   apkDownloadUrl,
                   apkFile.path,
-                  onReceiveProgress:
-                      _extra?["onReceiveProgress"] ?? _showDownloadProgress,
+                  onReceiveProgress: _extra?["onReceiveProgress"] ??
+                      (received, total) {
+                        if (total != -1) {
+                          var nowProgress = (received / total);
+                          if (nowProgress.toStringAsFixed(2) !=
+                              _updateProgress.toStringAsFixed(2)) {
+                            _updateProgress = nowProgress;
+                            _showToast(_updateProgress.toStringAsFixed(2));
+                            _showDownloadProgressWidget(
+                                context, _updateProgress);
+                          }
+                        } else {}
+                      },
                   cancelToken: cancelToken,
                 );
               }
               _loadingState = _LoadingState.loadComplete;
+
+              ///开始安装
+              print("开始安装${apkFile.path}");
+              AppInstaller.installApk(apkFile.path).then((value) {
+                print("安装器打开成功");
+                return value;
+              });
             } catch (e) {
               print(e);
               _showToast("下载失败,请检查网络连接后重试");
+              apkFile.deleteSync();
+              _loadingState = _LoadingState.notLoaded;
+            } finally {
+              _updateProgress = 0;
+              _dismissProgressWidget();
               _loadingState = _LoadingState.notLoaded;
             }
           }
-
-          ///开始安装
-          print("开始安装${apkFile.path}");
-          AppInstaller.installApk(apkFile.path).then((value) {
-            print("安装器打开成功");
-            return value;
-          });
         },
         child: _upgradeParam.apkDownloadWidget ??
             Column(
@@ -485,18 +505,8 @@ class AppUpgrade {
   }
 
 //  更新进度
-  static String _updateProgress = '';
-
-  static void _showDownloadProgress(received, total) {
-    if (total != -1) {
-      _updateProgress = (received / total * 100).toStringAsFixed(0) + '%';
-      // _showToast("${_packageInfo?.appName} 已更新:" +
-      //     (received / total * 100).toStringAsFixed(0) +
-      //     '%');
-    } else {
-      _updateProgress = '';
-    }
-  }
+  static double _updateProgress = 0;
+  static StreamController<double>? streamController;
 
   static void _showToast(String s) {
     print(s);
@@ -509,5 +519,161 @@ class AppUpgrade {
     if (!_upgradeParam.forceUpdate) {
       Navigator.of(context).pop();
     }
+  }
+
+  static OverlayEntry? overlayEntry;
+
+  static double overlayWidth = 50;
+  static Offset offset = Offset.zero;
+
+  static void _showDownloadProgressWidget(
+      BuildContext context, double progress) {
+    streamController ??= StreamController<double>();
+    if (!streamController!.isClosed) {
+      streamController!.sink.add(progress);
+    }
+    if (overlayEntry != null) {
+      return;
+    }
+    overlayEntry ??= OverlayEntry(
+        builder: (BuildContext context) => GestureDetector(
+              onDoubleTap: () {
+                _dismissProgressWidget();
+              },
+              child: DraggableButtonWidget(
+                streamController: streamController!,
+              ),
+            ));
+    print('添加弹框');
+    Overlay.of(context)?.insert(overlayEntry!);
+  }
+
+  ///关闭悬浮按钮
+  static void _dismissProgressWidget() {
+    overlayEntry?.remove();
+    overlayEntry = null;
+    streamController = null;
+  }
+}
+
+class DraggableButtonWidget extends StatefulWidget {
+  final String? title;
+  final Function? onTap;
+  final double btnSize;
+  final Color? btnColor;
+  final StreamController<double> streamController;
+
+  const DraggableButtonWidget(
+      {Key? key,
+      this.title,
+      this.onTap,
+      this.btnSize = 66,
+      this.btnColor,
+      required this.streamController})
+      : super(key: key);
+
+  @override
+  _DraggableButtonWidgetState createState() =>
+      _DraggableButtonWidgetState(streamController);
+}
+
+class _DraggableButtonWidgetState extends State<DraggableButtonWidget> {
+  double left = 30;
+  double top = 100;
+  late double screenWidth;
+  late double screenHeight;
+
+  final StreamController<double> streamController;
+
+  _DraggableButtonWidgetState(this.streamController);
+
+  @override
+  void dispose() {
+    streamController.close();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    screenWidth = MediaQuery.of(context).size.width;
+    screenHeight = MediaQuery.of(context).size.height;
+
+    ///默认点击事件
+    var tap = () {};
+    Widget w;
+    Color primaryColor = widget.btnColor ?? Theme.of(context).primaryColor;
+    primaryColor = primaryColor.withOpacity(0.6);
+    w = GestureDetector(
+      onTap: widget.onTap as void Function()? ?? tap,
+      onPanUpdate: _dragUpdate,
+      child: Container(
+        width: widget.btnSize,
+        height: widget.btnSize,
+        color: primaryColor,
+        child: Material(
+          child: Center(
+            child: StreamBuilder<double>(
+                stream: streamController.stream,
+                builder: (context, snapshot) {
+                  var value = snapshot.data ?? 0;
+                  return Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      WaterContainerWidget(
+                        color: primaryColor,
+                        waterLevel: value,
+                        size: widget.btnSize,
+                      ),
+                      Text(
+                        (value * 100).toStringAsFixed(0) + "%",
+                        style: const TextStyle(wordSpacing: 32),
+                      ),
+                    ],
+                  );
+                }),
+            // child: Material(child: Text('data=')),
+          ),
+        ),
+      ),
+    );
+
+    ///圆形
+    w = ClipRRect(
+      borderRadius: BorderRadius.circular(widget.btnSize / 2),
+      child: w,
+    );
+
+    ///计算偏移量限制
+    if (left < 1) {
+      left = 1;
+    }
+    if (left > screenWidth - widget.btnSize) {
+      left = screenWidth - widget.btnSize;
+    }
+
+    if (top < 1) {
+      top = 1;
+    }
+    if (top > screenHeight - widget.btnSize) {
+      top = screenHeight - widget.btnSize;
+    }
+    w = Container(
+      alignment: Alignment.topLeft,
+      margin: EdgeInsets.only(left: left, top: top),
+      child: w,
+    );
+    return w;
+  }
+
+  _dragUpdate(DragUpdateDetails detail) {
+    Offset offset = detail.delta;
+    left = left + offset.dx;
+    top = top + offset.dy;
+    setState(() {});
   }
 }
