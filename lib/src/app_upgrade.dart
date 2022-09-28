@@ -63,6 +63,7 @@ class AppUpgradeParam {
 }
 
 enum MarketsType { xiaomi, yingyongbao, huawei, oppo, vivo, samsung, def }
+
 enum _LoadingState { loading, loadComplete, notLoaded }
 
 const _mapMarketsType2Name = {
@@ -453,7 +454,6 @@ class AppUpgrade {
                           if (nowProgress.toStringAsFixed(2) !=
                               _updateProgress.toStringAsFixed(2)) {
                             _updateProgress = nowProgress;
-                            _showToast(_updateProgress.toStringAsFixed(2));
                             _showDownloadProgressWidget(
                                 context, _updateProgress);
                           }
