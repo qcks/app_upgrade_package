@@ -12,8 +12,6 @@ dependencies:
     sdk: flutter
 
   shared_preferences: ^2.0.13
-  package_info_plus: ^1.4.2
-  device_info_plus: ^3.2.3
   url_launcher: ^6.0.20
   device_apps: ^2.2.0
   path_provider: ^2.0.9
@@ -21,6 +19,8 @@ dependencies:
   dio: ^4.0.6
   #  permission_handler: ^8.1.3
   app_installer: ^1.1.0
+  package_info_plus: 3.1.2
+  device_info_plus: 8.1.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

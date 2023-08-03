@@ -152,14 +152,14 @@ class AppUpgrade {
     try {
       var packageInfo = await PackageInfo.fromPlatform();
       _packageInfo = packageInfo;
-      final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-      if (Platform.isAndroid) {
-        AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-        deviceId = androidInfo.androidId ?? '';
-      } else if (Platform.isIOS) {
-        IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
-        deviceId = iosInfo.identifierForVendor ?? '';
-      }
+      // final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+      // if (Platform.isAndroid) {
+      //   AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+      //   deviceId = androidInfo.id ?? '';
+      // } else if (Platform.isIOS) {
+      //   IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
+      //   deviceId = iosInfo.identifierForVendor ?? '';
+      // }
       nowVersion = int.parse(packageInfo.buildNumber);
       packageName = packageInfo.packageName;
       return nowVersion;
