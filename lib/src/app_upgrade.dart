@@ -428,7 +428,7 @@ class AppUpgrade {
             _loadingState = _LoadingState.notLoaded;
           }
           if (_loadingState == _LoadingState.loading) {
-            _showToast("${_packageInfo?.appName} 后台下载更新中($_updateProgress)...");
+            _showToast("${_packageInfo?.appName} 后台下载更新中...");
             return;
           } else if (_loadingState == _LoadingState.notLoaded) {
             ///下载
